@@ -10,8 +10,7 @@ using namespace ci;
 using namespace ci::app;
 using namespace std;
 
-//static const int CAMWIDTH = 640, CAMHEIGHT = 480;
-static const int CAMWIDTH = 1280, CAMHEIGHT = 720;
+static const int CAMWIDTH = 640, CAMHEIGHT = 480;
 
 class SmilesApp : public AppBasic {
   public:
@@ -19,7 +18,6 @@ class SmilesApp : public AppBasic {
 	void setup();
 	void update();
 	void draw();
-    void drawAllCams();
     
     void        mouseDown( MouseEvent event );
     void        mouseDrag( MouseEvent event );
@@ -30,8 +28,8 @@ class SmilesApp : public AppBasic {
     
     MPSmile*            mMPSmile;
     
-    vector<Capture>		mCaptures;
-	vector<gl::Texture>	mTextures;
+    Capture             mCapture;
+	gl::Texture         mTexture;
     
     Surface8u           mSurface;
     Channel             mGreyChannel;
@@ -66,33 +64,18 @@ void SmilesApp::prepareSettings( Settings *settings ){
 
 void SmilesApp::setup()
 {	
-    mSmileLimit = 5.0f;
+    mSmileLimit = 4.0f;
     mSmileAverageNumOfFrames = 10;
     mCamIndex = 0;
     mFps = getAverageFps();
     
-	// list out the devices
-	vector<Capture::DeviceRef> devices( Capture::getDevices() );
-	for( vector<Capture::DeviceRef>::const_iterator deviceIt = devices.begin(); deviceIt != devices.end(); ++deviceIt ) {
-		Capture::DeviceRef device = *deviceIt;
-		console() << "Found Device " << device->getName() << " ID: " << device->getUniqueId() << std::endl;
-		try {
-			if( device->checkAvailable() ) {
-				mCaptures.push_back( Capture( CAMWIDTH, CAMHEIGHT, device ) );
-				//mCaptures.back().start();
-				// placeholder text
-				mTextures.push_back( gl::Texture() );
-			}
-			else
-				console() << "device is NOT available" << std::endl;
-		}
-		catch( CaptureExc & ) {
-			console() << "Unable to initialize device: " << device->getName() << endl;
-		}
+    try {
+		mCapture = Capture( CAMWIDTH, CAMHEIGHT );
+		mCapture.start();
 	}
-    if(mCaptures.size() > mCamIndex){
-        mCaptures[mCamIndex].start();
-    }
+	catch( ... ) {
+		console() << "Failed to initialize capture" << std::endl;
+	}
     
     mSmileRect = Rectf(300,100,600,400);
     setupSmileDetector(mSmileRect.getInteriorArea().getWidth(), mSmileRect.getInteriorArea().getHeight());
@@ -179,9 +162,6 @@ void SmilesApp::detectSmiles(const RImage<float> &pixels)
         for(list<VisualObject *>::iterator it = mFaces.begin(); it != mFaces.end(); ++it) {
             mFace = static_cast<FaceObject*>(*it);
             mSmileResponse = mFace->activation;
-            //if(mSmileResponse > mSmileLimit) mSmileResponse = mSmileLimit;
-            //if(mSmileResponse < 0) mSmileResponse = 0;
-            //mSmileResponse = (mSmileResponse / mSmileLimit);
             mSmileResponse = max( 0.0f, min( mSmileResponse, mSmileLimit ) ) / mSmileLimit;
         }
         //console() << mFaces.size() << " faces detected!" << endl;
@@ -203,29 +183,19 @@ void SmilesApp::detectSmiles(const RImage<float> &pixels)
 void SmilesApp::update()
 {
     mFps = getAverageFps();
-    /*
-    for( vector<Capture>::iterator cIt = mCaptures.begin(); cIt != mCaptures.end(); ++cIt ) {
-		if( cIt->checkNewFrame() ) {
-			mSurface = cIt->getSurface();
-			mTextures[cIt - mCaptures.begin()] = gl::Texture( cIt->getSurface() );
-		}
-	}*/
-    if( getElapsedFrames()%3 == 0  ){
-        if(mCaptures.size() > mCamIndex && mCaptures[mCamIndex].checkNewFrame() ){
-                mSurface = mCaptures[mCamIndex].getSurface();
+    
+    if(mCapture && mCapture.checkNewFrame() ){
+            mSurface = mCapture.getSurface();
+    }
+    if (mSurface){
+        mGreyChannel = Channel( mSurface.clone(mSmileRect.getInteriorArea()) );
+        int totalDetectionPixels = mGreyChannel.getWidth()*mGreyChannel.getHeight();
+        unsigned char * detectionPixels = mGreyChannel.getData();
+        for (int i = 0; i < totalDetectionPixels; i++){
+            mRImage_pixels->array[i] = detectionPixels[i];
         }
-        //*
-        if (mSurface){
-            mGreyChannel = Channel( mSurface.clone(mSmileRect.getInteriorArea()) );
-            int totalDetectionPixels = mGreyChannel.getWidth()*mGreyChannel.getHeight();
-            unsigned char * detectionPixels = mGreyChannel.getData();
-            for (int i = 0; i < totalDetectionPixels; i++){
-                mRImage_pixels->array[i] = detectionPixels[i];
-            }
-            detectSmiles(*mRImage_pixels);
-            //console() << smileThreshold  << endl;
-        }
-        //*/
+        detectSmiles(*mRImage_pixels);
+        //console() << smileThreshold  << endl;
     }
 }
 
@@ -236,10 +206,9 @@ void SmilesApp::draw()
     gl::color(1.0f, 1.0f, 1.0f);
     
     // draw webcam capture
-	if( mCaptures.empty() || !mSurface )
+	if( !mCapture || !mSurface )
 		return;
-    //gl::draw( gl::Texture(mSurface) );
-    //gl::drawStrokedRect(Rectf( 0,0,mSurface.getWidth(),mSurface.getHeight()));
+    gl::draw( gl::Texture(mSurface) );
     
     if(mGreyChannel){
     gl::pushMatrices();{
@@ -277,22 +246,6 @@ void SmilesApp::draw()
     }
     
     mParams.draw();
-}
-
-void SmilesApp::drawAllCams()
-{
-    /*
-    float width = getWindowWidth() / mCaptures.size();	
-	float height = width / ( CAMWIDTH / (float)CAMHEIGHT );
-	float x = 0, y = ( getWindowHeight() - height ) / 2.0f;
-	for( vector<Capture>::iterator cIt = mCaptures.begin(); cIt != mCaptures.end(); ++cIt ) {	
-		// draw the latest frame
-		gl::color( Color::white() );
-		if( mTextures[cIt-mCaptures.begin()] )
-			gl::draw( mTextures[cIt-mCaptures.begin()], Rectf( x, y, x + width, y + height ) );
-		x += width;
-	}
-    */
 }
 
 CINDER_APP_BASIC( SmilesApp, RendererGl )
